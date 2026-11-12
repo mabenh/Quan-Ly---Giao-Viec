@@ -35,6 +35,11 @@ jobs:
       - name: Tìm thư mục dự án
         run: |
           f=$(find . -path '*/backend/package.json' -not -path '*/node_modules/*' | head -1)
+          if [ -z "$f" ] && [ -n "$(find . -maxdepth 2 -name '*.zip' | head -1)" ]; then
+            z=$(find . -maxdepth 2 -name '*.zip' | head -1)
+            echo "Giải nén $z"; unzip -q -o "$z" -d .
+            f=$(find . -path '*/backend/package.json' -not -path '*/node_modules/*' | head -1)
+          fi
           if [ -z "$f" ]; then echo "::error::Không tìm thấy backend/package.json trong repo"; exit 1; fi
           echo "APP_DIR=$(dirname "$(dirname "$f")")" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
@@ -58,6 +63,11 @@ jobs:
       - name: Tìm thư mục dự án
         run: |
           f=$(find . -path '*/backend/package.json' -not -path '*/node_modules/*' | head -1)
+          if [ -z "$f" ] && [ -n "$(find . -maxdepth 2 -name '*.zip' | head -1)" ]; then
+            z=$(find . -maxdepth 2 -name '*.zip' | head -1)
+            echo "Giải nén $z"; unzip -q -o "$z" -d .
+            f=$(find . -path '*/backend/package.json' -not -path '*/node_modules/*' | head -1)
+          fi
           echo "APP_DIR=$(dirname "$(dirname "$f")")" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
@@ -100,6 +110,11 @@ jobs:
       - name: Tìm thư mục dự án
         run: |
           f=$(find . -path '*/backend/package.json' -not -path '*/node_modules/*' | head -1)
+          if [ -z "$f" ] && [ -n "$(find . -maxdepth 2 -name '*.zip' | head -1)" ]; then
+            z=$(find . -maxdepth 2 -name '*.zip' | head -1)
+            echo "Giải nén $z"; unzip -q -o "$z" -d .
+            f=$(find . -path '*/backend/package.json' -not -path '*/node_modules/*' | head -1)
+          fi
           echo "APP_DIR=$(dirname "$(dirname "$f")")" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
