@@ -30,21 +30,24 @@ jobs:
         ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U app" --health-interval 5s --health-timeout 5s --health-retries 10
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - uses: actions/checkout@v4
+      - name: Tìm thư mục dự án
+        run: |
+          f=$(find . -path '*/backend/package.json' -not -path '*/node_modules/*' | head -1)
+          if [ -z "$f" ]; then echo "::error::Không tìm thấy backend/package.json trong repo"; exit 1; fi
+          echo "APP_DIR=$(dirname "$(dirname "$f")")" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: backend/package-lock.json
-      - run: npm ci
-      - run: npx tsc -p tsconfig.json --noEmit
-      - run: npm test
+      - name: Cài đặt & kiểm thử
+        working-directory: ${{ env.APP_DIR }}/backend
         env:
           TEST_DATABASE_URL: postgresql://app:app@localhost:5432/teamapp_test
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npx tsc -p tsconfig.json --noEmit
+          npm test
 
   server:
     name: Build server + web (PWA)
@@ -52,72 +55,78 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Tìm thư mục dự án
+        run: |
+          f=$(find . -path '*/backend/package.json' -not -path '*/node_modules/*' | head -1)
+          echo "APP_DIR=$(dirname "$(dirname "$f")")" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Build web (PWA, cùng origin với API)
-        working-directory: mobile-web
+        working-directory: ${{ env.APP_DIR }}/mobile-web
         run: |
-          npm ci
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
           npm run build
       - name: Build backend
-        working-directory: backend
+        working-directory: ${{ env.APP_DIR }}/backend
         run: |
-          npm ci
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
           npm run build
       - name: Đóng gói
+        working-directory: ${{ env.APP_DIR }}
         run: |
           mkdir -p out/backend out/mobile-web
-          cp -r backend/dist backend/assets backend/package.json backend/package-lock.json backend/.env.example out/backend/
+          cp -r backend/dist backend/assets backend/package.json out/backend/
+          cp backend/package-lock.json backend/.env.example out/backend/ 2>/dev/null || true
           cp -r mobile-web/dist out/mobile-web/
-          cp README.md out/
-          cat > out/START.txt <<'TXT'
-          Chạy server (cần Node 22 + PostgreSQL 16):
-            cd backend
-            npm ci --omit=dev
-            DATABASE_URL=postgresql://user:pass@host:5432/db JWT_SECRET=... node dist/main.js
-          Server tự migrate DB và phục vụ giao diện tại http://<host>:3000
-          TXT
+          cp README.md out/ 2>/dev/null || true
+          printf '%s\n' \
+            'Chạy server (cần Node 22 + PostgreSQL 16):' \
+            '  cd backend' \
+            '  npm install --omit=dev' \
+            '  DATABASE_URL=postgresql://user:pass@host:5432/db JWT_SECRET=... node dist/main.js' \
+            'Server tự tạo bảng (migrate) và phục vụ giao diện tại http://<host>:3000' > out/START.txt
       - uses: actions/upload-artifact@v4
         with:
           name: server-bundle
-          path: out/
+          path: ${{ env.APP_DIR }}/out/
 
   android:
     name: Build APK Android (Capacitor)
     needs: test
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: mobile-web
     steps:
       - uses: actions/checkout@v4
+      - name: Tìm thư mục dự án
+        run: |
+          f=$(find . -path '*/backend/package.json' -not -path '*/node_modules/*' | head -1)
+          echo "APP_DIR=$(dirname "$(dirname "$f")")" >> "$GITHUB_ENV"
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: mobile-web/package-lock.json
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
-      - run: npm ci
       - name: Build web trỏ tới API
-        run: npm run build
+        working-directory: ${{ env.APP_DIR }}/mobile-web
         env:
           VITE_API_URL: ${{ env.API_URL }}
-          VITE_HIDE_DEMO: 'false'
+        run: |
+          if [ -f package-lock.json ]; then npm ci; else npm install; fi
+          npm run build
       - name: Tạo/đồng bộ project Android
+        working-directory: ${{ env.APP_DIR }}/mobile-web
         run: |
           if [ ! -d android ]; then npx cap add android; fi
           npx cap sync android
       - name: Gradle assembleDebug
-        working-directory: mobile-web/android
+        working-directory: ${{ env.APP_DIR }}/mobile-web/android
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: mobile-web/android/app/build/outputs/apk/debug/*.apk
+          path: ${{ env.APP_DIR }}/mobile-web/android/app/build/outputs/apk/debug/*.apk
