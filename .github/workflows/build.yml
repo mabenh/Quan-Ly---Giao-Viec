@@ -1,36 +1,123 @@
-# This is a basic workflow to help you get started with Actions
+name: Build
 
-name: CI
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
   push:
-    branches: [ "main" ]
+    branches: [main, master]
   pull_request:
-    branches: [ "main" ]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+    inputs:
+      api_url:
+        description: 'Địa chỉ API mà app Android gọi tới (vd: https://api.congty.vn/api/v1)'
+        required: false
+        default: ''
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+env:
+  NODE_VERSION: '22'
+  # Ưu tiên: input khi chạy tay -> biến repo API_URL (Settings > Secrets and variables > Actions > Variables)
+  API_URL: ${{ github.event.inputs.api_url || vars.API_URL || 'http://10.0.2.2:3000/api/v1' }}
+
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
+  test:
+    name: Kiểm thử backend
     runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: teamapp_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U app" --health-interval 5s --health-timeout 5s --health-retries 10
+    defaults:
+      run:
+        working-directory: backend
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npx tsc -p tsconfig.json --noEmit
+      - run: npm test
+        env:
+          TEST_DATABASE_URL: postgresql://app:app@localhost:5432/teamapp_test
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
-
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+  server:
+    name: Build server + web (PWA)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Build web (PWA, cùng origin với API)
+        working-directory: mobile-web
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          npm ci
+          npm run build
+      - name: Build backend
+        working-directory: backend
+        run: |
+          npm ci
+          npm run build
+      - name: Đóng gói
+        run: |
+          mkdir -p out/backend out/mobile-web
+          cp -r backend/dist backend/assets backend/package.json backend/package-lock.json backend/.env.example out/backend/
+          cp -r mobile-web/dist out/mobile-web/
+          cp README.md out/
+          cat > out/START.txt <<'TXT'
+          Chạy server (cần Node 22 + PostgreSQL 16):
+            cd backend
+            npm ci --omit=dev
+            DATABASE_URL=postgresql://user:pass@host:5432/db JWT_SECRET=... node dist/main.js
+          Server tự migrate DB và phục vụ giao diện tại http://<host>:3000
+          TXT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: server-bundle
+          path: out/
+
+  android:
+    name: Build APK Android (Capacitor)
+    needs: test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile-web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: mobile-web/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - run: npm ci
+      - name: Build web trỏ tới API
+        run: npm run build
+        env:
+          VITE_API_URL: ${{ env.API_URL }}
+          VITE_HIDE_DEMO: 'false'
+      - name: Tạo/đồng bộ project Android
+        run: |
+          if [ ! -d android ]; then npx cap add android; fi
+          npx cap sync android
+      - name: Gradle assembleDebug
+        working-directory: mobile-web/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: mobile-web/android/app/build/outputs/apk/debug/*.apk
