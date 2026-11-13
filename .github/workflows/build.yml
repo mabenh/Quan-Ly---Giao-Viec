@@ -14,7 +14,7 @@ on:
 env:
   NODE_VERSION: '22'
   # Ưu tiên: input khi chạy tay -> biến repo API_URL (Settings > Secrets and variables > Actions > Variables)
-  API_URL: ${{ github.event.inputs.api_url || vars.API_URL || 'http://10.0.2.2:3000/api/v1' }}
+  API_URL: ${{ github.event.inputs.api_url || vars.API_URL || 'https://viecden.nhavanmon.com.vn/api/v1' }}
 
 jobs:
   test:
