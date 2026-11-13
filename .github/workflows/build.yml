@@ -139,6 +139,13 @@ jobs:
         working-directory: ${{ env.APP_DIR }}/mobile-web
         run: |
           if [ ! -d android ]; then npx cap add android; fi
+          # Biểu tượng & màn hình khởi động Việc Đến
+          cp -r resources/android/res/. android/app/src/main/res/
+          # Quyền camera (quét gương mặt) và micro (ghi âm khai việc)
+          M=android/app/src/main/AndroidManifest.xml
+          for p in CAMERA RECORD_AUDIO MODIFY_AUDIO_SETTINGS; do
+            grep -q "android.permission.$p\"" $M || sed -i "s#</manifest>#    <uses-permission android:name=\"android.permission.$p\" />\n</manifest>#" $M
+          done
           npx cap sync android
       - name: Gradle assembleDebug
         working-directory: ${{ env.APP_DIR }}/mobile-web/android
