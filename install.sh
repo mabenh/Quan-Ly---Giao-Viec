@@ -54,8 +54,11 @@ sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='$DB_NAME'" 
 
 log "4/8 Lấy mã nguồn ($REPO)"
 SRC="$APP_DIR/src"
+# Thư mục thuộc user viecden nhưng script chạy bằng root -> git báo "dubious ownership" và KHÔNG cập nhật. Đánh dấu thư mục an toàn.
+git config --global --get-all safe.directory 2>/dev/null | grep -qx "$SRC" || git config --global --add safe.directory "$SRC"
 if [[ -d "$SRC/.git" ]]; then
-  git -C "$SRC" fetch -q origin "$BRANCH" && git -C "$SRC" reset -q --hard "origin/$BRANCH"
+  git -C "$SRC" fetch -q origin "$BRANCH" || die "Không tải được mã mới từ GitHub ($REPO, nhánh $BRANCH)"
+  git -C "$SRC" reset -q --hard "origin/$BRANCH"
 else
   rm -rf "$SRC"; git clone -q --depth 1 -b "$BRANCH" "$REPO" "$SRC"
 fi
