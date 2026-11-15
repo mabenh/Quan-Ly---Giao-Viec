@@ -60,12 +60,16 @@ else
   rm -rf "$SRC"; git clone -q --depth 1 -b "$BRANCH" "$REPO" "$SRC"
 fi
 cd "$SRC"
-if [[ ! -f backend/package.json ]]; then
-  Z=$(find . -maxdepth 2 -name '*.zip' | head -1)
-  [[ -n "$Z" ]] || die "Không thấy thư mục backend hay file .zip mã nguồn trong repo"
-  [[ $(find . -maxdepth 2 -name '*.zip' | wc -l) -eq 1 ]] || die "Repo có nhiều hơn 1 file .zip — chỉ giữ 1 file source.zip"
-  unzip -q -o "$Z" -d .
+# Repo chứa source.zip: MỖI LẦN cập nhật đều xóa bản giải nén cũ (file không thuộc git) rồi giải nén lại bản zip mới nhất.
+# (Bản trước chỉ giải nén ở lần cài đầu nên các lần cập nhật sau vẫn chạy mã cũ.)
+ZIPS=$(git ls-files | grep -iE '\.zip$' || true)
+if [[ -n "$ZIPS" ]]; then
+  [[ $(echo "$ZIPS" | wc -l) -eq 1 ]] || die "Repo có nhiều hơn 1 file .zip — chỉ giữ 1 file source.zip"
+  git clean -ffdxq -e node_modules
+  unzip -q -o "$ZIPS" -d .
+  log "Đã giải nén $ZIPS (commit $(git log -1 --format='%h %cd' --date=format:'%d/%m/%Y %H:%M'))"
 fi
+[[ -f backend/package.json ]] || die "Không thấy thư mục backend hay file source.zip trong repo"
 chown -R "$APP_USER:$APP_USER" "$APP_DIR"
 
 log "5/8 Build giao diện & backend"
