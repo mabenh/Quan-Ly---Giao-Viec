@@ -43,7 +43,11 @@ if [[ -f "$ENV_FILE" ]]; then
   # giữ nguyên mật khẩu/bí mật cũ khi cập nhật
   DB_PASS=$(grep -oP '^DATABASE_URL=postgresql://[^:]+:\K[^@]+' "$ENV_FILE" || true)
   JWT_SECRET=$(grep -oP '^JWT_SECRET=\K.*' "$ENV_FILE" || true)
+  FIELD_KEY=$(grep -oP '^FIELD_ENCRYPTION_KEY=\K.*' "$ENV_FILE" || true)
+  # v9: giữ cấu hình TURN (gọi trong app qua mạng di động) nếu đã khai báo
+  EXTRA_ENV=$(grep -E '^(TURN_URL|TURN_USER|TURN_PASS|STUN_URLS|CALL_LIMIT_SECONDS|COMMS_RETENTION_DAYS|AREA_SESSION_HOURS|HANDOVER_QR_DAYS)=' "$ENV_FILE" || true)
 fi
+FIELD_KEY="${FIELD_KEY:-$(openssl rand -hex 32)}"
 DB_PASS="${DB_PASS:-$(openssl rand -hex 16)}"
 JWT_SECRET="${JWT_SECRET:-$(openssl rand -hex 32)}"
 sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1 \
@@ -92,6 +96,9 @@ UPLOAD_DIR=$APP_DIR/uploads
 WEB_DIR=$SRC/mobile-web/dist
 PLAN_ACTIVATION=auto
 CORS_ORIGIN=https://$DOMAIN,https://localhost,capacitor://localhost,http://localhost
+PUBLIC_URL=https://$DOMAIN
+FIELD_ENCRYPTION_KEY=$FIELD_KEY
+${EXTRA_ENV:-}
 EOF
 chmod 600 "$ENV_FILE"; chown "$APP_USER:$APP_USER" "$ENV_FILE"
 mkdir -p "$APP_DIR/uploads" && chown "$APP_USER:$APP_USER" "$APP_DIR/uploads"
