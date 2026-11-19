@@ -149,6 +149,8 @@ jobs:
           npm run build
       - name: Tạo/đồng bộ project Android
         working-directory: ${{ env.APP_DIR }}/mobile-web
+        env:
+          APP_URL_BASE: ${{ env.API_URL }}
         run: |
           if [ ! -d android ]; then npx cap add android; fi
           # Biểu tượng & màn hình khởi động Việc Đến
@@ -158,6 +160,10 @@ jobs:
           for p in CAMERA RECORD_AUDIO MODIFY_AUDIO_SETTINGS; do
             grep -q "android.permission.$p\"" $M || sed -i "s#</manifest>#    <uses-permission android:name=\"android.permission.$p\" />\n</manifest>#" $M
           done
+          # v13: APK tải giao diện trực tiếp từ máy chủ (luôn là bản mới nhất, không cần cài lại APK mỗi lần cập nhật).
+          # Mất mạng thì dùng bản giao diện đóng gói sẵn trong APK.
+          export APP_URL="${APP_URL_BASE%/api/v1}"
+          node -e "const f='capacitor.config.json';const c=require('./'+f);c.server={...(c.server||{}),url:process.env.APP_URL,androidScheme:'https',cleartext:false,errorPath:'index.html'};require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
           npx cap sync android
       - name: Gradle assembleDebug
         working-directory: ${{ env.APP_DIR }}/mobile-web/android
