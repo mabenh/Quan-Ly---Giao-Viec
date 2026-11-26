@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Cài đặt / cập nhật Việc Đến trên VPS Ubuntu 22.04/24.04.
 #   sudo bash install.sh                      # cài hoặc cập nhật
-#   sudo bash install.sh --seed               # cài + nạp dữ liệu demo (XÓA dữ liệu cũ)
+#   sudo bash install.sh --seed               # nạp dữ liệu demo CHỈ KHI CSDL còn trống (không bao giờ xóa dữ liệu đang dùng)
+#   sudo bash install.sh --reset-demo         # XÓA SẠCH CSDL và nạp lại demo (phải gõ xác nhận; có sao lưu trước)
 #   DOMAIN=viecden.example.vn sudo -E bash install.sh
 # Không đụng tới các website/CSDL khác trên VPS: chỉ thêm 1 site reverse proxy, 1 dịch vụ systemd, 1 CSDL riêng.
 set -euo pipefail
@@ -14,7 +15,9 @@ APP_USER="${APP_USER:-viecden}"
 DB_NAME="${DB_NAME:-viecden}"
 DB_USER="${DB_USER:-viecden}"
 EMAIL="${EMAIL:-}"            # email nhận thông báo Let's Encrypt (tùy chọn)
-SEED=0; [[ "${1:-}" == "--seed" ]] && SEED=1
+SEED=0; RESET=0
+[[ "${1:-}" == "--seed" ]] && SEED=1
+[[ "${1:-}" == "--reset-demo" ]] && RESET=1
 
 log() { echo -e "\033[1;34m==> $*\033[0m"; }
 die() { echo -e "\033[1;31mLỖI: $*\033[0m" >&2; exit 1; }
@@ -45,7 +48,7 @@ if [[ -f "$ENV_FILE" ]]; then
   JWT_SECRET=$(grep -oP '^JWT_SECRET=\K.*' "$ENV_FILE" || true)
   FIELD_KEY=$(grep -oP '^FIELD_ENCRYPTION_KEY=\K.*' "$ENV_FILE" || true)
   # v9: giữ cấu hình TURN (gọi trong app qua mạng di động) nếu đã khai báo
-  EXTRA_ENV=$(grep -E '^(TURN_URL|TURN_USER|TURN_PASS|STUN_URLS|CALL_LIMIT_SECONDS|COMMS_RETENTION_DAYS|AREA_SESSION_HOURS|HANDOVER_QR_DAYS)=' "$ENV_FILE" || true)
+  EXTRA_ENV=$(grep -E '^(TURN_URL|TURN_USER|TURN_PASS|STUN_URLS|CALL_LIMIT_SECONDS|COMMS_RETENTION_DAYS|AREA_SESSION_HOURS|HANDOVER_QR_DAYS|SMS_[A-Z_]+|ESMS_[A-Z_]+|SPEEDSMS_[A-Z_]+|TWILIO_[A-Z_]+|OTP_[A-Z_]+|REFRESH_DAYS|RATE_LIMIT_[A-Z_]+)=' "$ENV_FILE" || true)
 fi
 FIELD_KEY="${FIELD_KEY:-$(openssl rand -hex 32)}"
 DB_PASS="${DB_PASS:-$(openssl rand -hex 16)}"
@@ -119,10 +122,30 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 systemctl daemon-reload
-if [[ $SEED -eq 1 ]]; then
-  log "Nạp dữ liệu demo (xóa dữ liệu cũ của CSDL $DB_NAME)"
+
+# v14: SAO LƯU CSDL trước mỗi lần cập nhật (giữ 14 bản gần nhất) — tài khoản đăng ký & dữ liệu không bao giờ mất khi cập nhật
+BACKUP_DIR="$APP_DIR/backups"; mkdir -p "$BACKUP_DIR"; chmod 700 "$BACKUP_DIR"
+USERS=$(sudo -u postgres psql -d "$DB_NAME" -tAc "SELECT count(*) FROM users" 2>/dev/null || echo 0)
+USERS=${USERS:-0}
+if [[ "$USERS" =~ ^[0-9]+$ && "$USERS" -gt 0 ]]; then
+  BK="$BACKUP_DIR/viecden-$(date +%Y%m%d-%H%M%S).sql.gz"
+  sudo -u postgres pg_dump "$DB_NAME" | gzip > "$BK" && log "Đã sao lưu CSDL ($USERS tài khoản) → $BK"
+  ls -1t "$BACKUP_DIR"/viecden-*.sql.gz 2>/dev/null | tail -n +15 | xargs -r rm -f
+fi
+run_seed() {
   systemctl stop viecden 2>/dev/null || true
-  sudo -u "$APP_USER" bash -c "cd '$SRC/backend' && set -a && . '$ENV_FILE' && set +a && DISABLE_SCHEDULER=true node dist/db/seed.js" | tail -2
+  sudo -u "$APP_USER" bash -c "cd '$SRC/backend' && set -a && . '$ENV_FILE' && set +a && DISABLE_SCHEDULER=true SEED_FORCE=1 node dist/db/seed.js" | tail -2
+}
+if [[ $RESET -eq 1 ]]; then
+  echo -e "\033[1;31mCẢNH BÁO: XÓA SẠCH CSDL $DB_NAME ($USERS tài khoản) và nạp lại dữ liệu demo.\033[0m"
+  read -r -p "Gõ XOA để xác nhận: " CONFIRM < /dev/tty
+  [[ "$CONFIRM" == "XOA" ]] && { log "Xóa CSDL và nạp dữ liệu demo"; run_seed; } || log "Đã hủy — giữ nguyên dữ liệu"
+elif [[ $SEED -eq 1 ]]; then
+  if [[ "$USERS" =~ ^[0-9]+$ && "$USERS" -gt 0 ]]; then
+    log "CSDL đã có $USERS tài khoản → BỎ QUA nạp demo, giữ nguyên dữ liệu (dùng --reset-demo nếu thật sự muốn xóa)"
+  else
+    log "CSDL trống → nạp dữ liệu demo"; run_seed
+  fi
 fi
 systemctl enable viecden >/dev/null 2>&1; systemctl restart viecden
 for i in $(seq 1 30); do curl -fsS "http://127.0.0.1:$PORT/api/v1/health" >/dev/null 2>&1 && break; sleep 1; done
@@ -143,6 +166,12 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_read_timeout 120s;
     }
+    # v14: nén dữ liệu (JS 1MB → ~280KB, JSON API nhỏ đi 4–8 lần) → app mở nhanh hơn trên 4G
+    gzip on;
+    gzip_proxied any;
+    gzip_comp_level 5;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/json application/javascript text/javascript application/manifest+json image/svg+xml;
 }
 EOF
   ln -sf /etc/nginx/sites-available/viecden /etc/nginx/sites-enabled/viecden
@@ -164,6 +193,7 @@ else
   cat >> /etc/caddy/Caddyfile <<EOF
 # viecden-begin
 $DOMAIN {
+    encode gzip
     reverse_proxy 127.0.0.1:$PORT
 }
 # viecden-end
@@ -179,5 +209,5 @@ else
   echo "⚠ Ứng dụng chạy ở cổng $PORT nhưng chưa truy cập được https://$DOMAIN — kiểm tra DNS, tường lửa (mở cổng 80, 443)."
 fi
 echo "API cho app Android:  https://$DOMAIN/api/v1"
-echo "Cập nhật phiên bản mới: sudo bash $SRC/deploy/install.sh"
+echo "Cập nhật phiên bản mới: sudo bash $SRC/deploy/install.sh   (KHÔNG cần --seed; dữ liệu được giữ và sao lưu ở $APP_DIR/backups)"
 echo "Xem log:              journalctl -u viecden -f"
